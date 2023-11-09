@@ -1,0 +1,806 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <id>https://yourfriendyo.github.io/</id>
+    <title>yourfriendyo</title>
+    <updated>2023-11-09T07:21:34.281Z</updated>
+    <generator>https://github.com/jpmonette/feed</generator>
+    <link rel="alternate" href="https://yourfriendyo.github.io/"/>
+    <link rel="self" href="https://yourfriendyo.github.io/atom.xml"/>
+    <subtitle>温故而知新</subtitle>
+    <logo>https://yourfriendyo.github.io/images/avatar.png</logo>
+    <icon>https://yourfriendyo.github.io/favicon.ico</icon>
+    <rights>All rights reserved 2023, yourfriendyo</rights>
+    <entry>
+        <title type="html"><![CDATA[同步异步日志系统]]></title>
+        <id>https://yourfriendyo.github.io/post/tong-bu-yi-bu-ri-zhi-xi-tong/</id>
+        <link href="https://yourfriendyo.github.io/post/tong-bu-yi-bu-ri-zhi-xi-tong/">
+        </link>
+        <updated>2023-11-09T07:19:11.000Z</updated>
+        <content type="html"><![CDATA[<h1 id="同步异步日志系统">同步异步日志系统</h1>
+<h2 id="1-项目介绍">1. 项目介绍</h2>
+<p><a href="https://gitee.com/yourfriendyo/logger">项目链接</a></p>
+<p>本项目是插件式的同步异步日志系统，不仅能让用户简便的输出日志，也支持多种功能。具体如下：</p>
+<ol>
+<li>支持多级别日志消息</li>
+<li>支持同步日志和异步日志</li>
+<li>支持日志多落地方向：到控制台、文件以及滚动文件中（落地方向支持拓展）</li>
+<li>支持多线程并发写入日志</li>
+</ol>
+<p>开发环境：centos7、vim、g++/gdb、Makefile，不依赖其他库。</p>
+<h4 id="异步日志">异步日志</h4>
+<p>同步日志指业务线程也负责日志输出，但会影响业务性能。</p>
+<p>异步日志的具体做法是业务线程将日志放入缓冲区内，日志线程从中提取日志进行输出，故不会耽误业务线程的运行。</p>
+<h3 id="技术重点">技术重点</h3>
+<ul>
+<li>类层次设计</li>
+<li>多线程、智能指针、右值引用</li>
+<li>双缓冲区</li>
+<li>生产消费模型</li>
+<li>多设计模式：单例、工厂、建造者</li>
+</ul>
+<p> </p>
+<h2 id="2-框架设计">2. 框架设计</h2>
+<p>日志系统的作用就是将一条消息格式化成指定格式的字符串并写入到指定位置。所以共设计如下几个模块：</p>
+<ul>
+<li>日志等级限制模块：支持限制日志等级式的输出。</li>
+<li>日志消息模块：封装一条日志所需的各种要素，如：时间、线程ID、文件名、行号、日志等级、消息主体等</li>
+<li>日志格式化模块：将日志的各种要素以及消息主体格式化成一个字符串</li>
+<li>日志落地模块：支持多种落地位置，并支持拓展。</li>
+<li>日志器模块：对上面多个模块进行对象组合。分为同步日志器模块和异步日志器模块。</li>
+<li>异步输出线程模块：负责异步日志的实际落地输出。</li>
+<li>日志器管理模块：以日志器器为单位，支持多日志器输出。对日志器进行全局的管理，以便于能在项目中任何位置获取指定日志器进行输出。</li>
+</ul>
+<img src="https://img.gejiba.com/images/69761d87f850184715f9b0f69f3a59e3.png" style="zoom:38%;" />
+<h2 id="3-代码设计">3. 代码设计</h2>
+<h3 id="31-日志等级类">3.1 日志等级类</h3>
+<ul>
+<li>定义所有日志等级</li>
+<li>定义接口，将对应等级的枚举变量转化为字符串</li>
+</ul>
+<p>日志共分7个等级，项目会定义一个默认的输出等级，只有当日志的等级大于等于默认的等级时才进行输出。</p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ON</code></td>
+<td>开启所有日志</td>
+</tr>
+<tr>
+<td><code>DEBUG</code></td>
+<td>调试级别日志</td>
+</tr>
+<tr>
+<td><code>INFO</code></td>
+<td>用户级提示信息</td>
+</tr>
+<tr>
+<td><code>WARN</code></td>
+<td>警告信息</td>
+</tr>
+<tr>
+<td><code>ERROR</code></td>
+<td>程序错误信息</td>
+</tr>
+<tr>
+<td><code>FATAL</code></td>
+<td>程序致命错误信息</td>
+</tr>
+<tr>
+<td><code>OFF</code></td>
+<td>关闭所有日志</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-cpp">struct log_level {
+    enum value {
+        DEBUG,
+        INFO,
+        WARN,
+        ERROR,
+        FATAL,
+        OFF,
+    };
+    const char* to_string(value level) {
+        switch (level) {
+        case value::DEBUG: return &quot;DEBUG&quot;; 
+        //...
+        }
+    }
+};
+</code></pre>
+<h3 id="32-日志消息类">3.2 日志消息类</h3>
+<p>日志消息类负责，在中间时刻，存储一条日志消息所需要的各项要素：时间、日志等级、源文件名、源代码行号、线程ID、信息主体和日志器名称。</p>
+<pre><code class="language-cpp">struct log_msg
+{
+    size_t _generate_time;   // 日志的产生时间
+    log_level::value _level; // 日志等级
+    std::thread::id _tid;    // 线程ID
+    size_t _line;            // 行号
+    std::string _file;       // 文件名
+    std::string _logger;     // 日志器名称
+    std::string _payload;    // 消息主体
+
+    log_msg(log_level::value level, size_t line,
+            const std::string&amp;&amp; file, const std::string&amp;&amp; logger, const std::string&amp;&amp; msg);
+};
+</code></pre>
+<h3 id="33-日志格式化类">3.3 日志格式化类</h3>
+<h4 id="功能">功能</h4>
+<p>该类负责对日志消息进行格式化组织，组织成指定格式的字符串，然后将其返回。</p>
+<table>
+<thead>
+<tr>
+<th>格式控制字符</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>%d{%H:%M:%S}</code></td>
+<td>表示日期时间，大括号中内容表示日期时间的格式</td>
+</tr>
+<tr>
+<td><code>%T</code></td>
+<td>表示制表符缩进</td>
+</tr>
+<tr>
+<td><code>%t</code></td>
+<td>表示线程ID</td>
+</tr>
+<tr>
+<td><code>%p</code></td>
+<td>表示日志等级</td>
+</tr>
+<tr>
+<td><code>%c</code></td>
+<td>表示日志器名称，不同开发组可以使用自己的日志器进行输出，互不影响</td>
+</tr>
+<tr>
+<td><code>%f</code></td>
+<td>表示源码文件名</td>
+</tr>
+<tr>
+<td><code>%l</code></td>
+<td>表示日志输出时的源码行号</td>
+</tr>
+<tr>
+<td><code>%m</code></td>
+<td>表示日志消息主体</td>
+</tr>
+<tr>
+<td><code>%n</code></td>
+<td>表示换行</td>
+</tr>
+</tbody>
+</table>
+<p>传入包含控制字符的格式控制串，按其要求输出格式化日志。</p>
+<pre><code class="language-txt">[%d{%H:%M:%S}][%p][%t][%c][%f:%l]%T%m%n
+[12:09:33][INFO][12649422][root][main.cc:38]	socket created\n
+</code></pre>
+<h4 id="设计">设计</h4>
+<p>抽象出一个格式化子项的基类，再派生出不同格式控制项的子类，如主体消息子项、时间子项、文件名子项等等，以及其他元素子项。</p>
+<pre><code class="language-cpp">// 抽象格式化子项基类
+struct format_item {
+    using ptr = std::shared_ptr&lt;format_item&gt;;
+    virtual void format(std::ostream&amp; out, log::log_msg&amp; msg) = 0;
+};
+
+// 格式化子项子类 -- 消息、等级、时间、文件名、行号、线程ID、日志器名、制表符、换行、其他
+struct payload_format_item : public format_item {
+    void format(std::ostream&amp; out, log::log_msg&amp; msg) override;
+};
+struct level_format_item : public format_item {
+    void format(std::ostream&amp; out, log::log_msg&amp; msg) override;
+};
+struct time_format_item : public format_item {
+    time_format_item(const std::string&amp; fmt = &quot;%H:%M:%S&quot;);
+    void format(std::ostream&amp; out, log::log_msg&amp; msg) override; 
+    std::string _time_fmt_str; // %H:%M:%S
+};
+struct file_format_item : public format_item {
+    void format(std::ostream&amp; out, log::log_msg&amp; msg) override;
+};
+struct line_format_item : public format_item {
+    void format(std::ostream&amp; out, log::log_msg&amp; msg) override;
+};
+struct thread_format_item : public format_item {
+    void format(std::ostream&amp; out, log::log_msg&amp; msg) override;
+};
+struct logger_format_item : public format_item {
+    void format(std::ostream&amp; out, log::log_msg&amp; msg) override;
+};
+struct tab_format_item : public format_item {
+    void format(std::ostream&amp; out, log::log_msg&amp; msg) override;
+};
+struct nline_format_item : public format_item {
+    void format(std::ostream&amp; out, log::log_msg&amp; msg) override;
+};
+struct other_format_item : public format_item {
+    other_format_item(const std::string&amp; s);
+    void format(std::ostream&amp; out, log::log_msg&amp; msg) override;
+    std::string _s;
+};
+</code></pre>
+<p>格式化器类中有两个成员，一是格式化规则字符串，控制格式化的要求。二是格式化子项父类的指针数组，保存各个格式化子项的子类对象。</p>
+<p>在格式化输出的时候，依次获取数组元素即子类对象。统一调用format方法将内容导入流中，再转换成字符串输出。</p>
+<pre><code class="language-cpp">class formatter
+{
+public:
+    formatter(const std::string&amp; pattern = &quot;[%d{%H:%M:%S}][%p][%t][%c][%f:%l]%T%m%n&quot;);
+    // 格式化msg
+    void format(std::ostream&amp; out, log_msg&amp; msg);
+    std::string format(log_msg&amp; msg);
+    // 解析格式化字符串 - 不是%就向后遍历，直到遇到%，前面是一个原始字符串子项，后面是一个控制字符
+    bool parsePattern();
+private:
+    // 根据格式控制字符创建格式化子项
+    void add_item(const std::string&amp; key, const std::string&amp; val);
+private:
+    std::string _pattern; // 格式化规则字符串
+    std::vector&lt;format_item::ptr&gt; _items;
+};
+</code></pre>
+<h3 id="34-日志落地类">3.4 日志落地类</h3>
+<h4 id="功能-2">功能</h4>
+<p>日志落地类是负责将已格式化好的日志输出到指定位置，并支持扩展将日志落地到不同位置。</p>
+<p>一般位置有标准输出、指定文件、滚动文件（文件按照时间或大小进行滚动切换）和自定义落地方向。</p>
+<h4 id="设计-2">设计</h4>
+<p>抽象出落地模块的基类，不同的落地方向从基类派生。使用简单工厂模式创建不同的落地器。</p>
+<pre><code class="language-cpp">class log_sink {
+public:
+    using ptr = std::shared_ptr&lt;log_sink&gt;;
+    log_sink() {}
+    virtual ~log_sink() {}
+    virtual void log(std::string&amp; data, size_t len) = 0;
+};
+
+// 落地方向：标准输出
+class stdout_sink : public log_sink {
+public:
+    void log(std::string&amp; data) override;
+};
+
+// 落地方向：指定文件
+class file_sink : public log_sink {
+public:
+    file_sink(const std::string&amp; path);
+    void log(std::string&amp; data) override;
+private:
+    std::string _file;
+    std::ofstream _ofs;
+};
+
+// 落地方向：滚动文件（按大小滚动）
+class rolling_sink : public log_sink
+{
+public:
+    rolling_sink(const std::string&amp; base_name, size_t max_size);
+    void log(std::string&amp; data) override;
+private:
+    void rolling();
+private:
+    std::string _base_name; // 基础文件名 ./logs/&lt;base&gt;-
+    std::ofstream _ofs;
+    size_t _max_size;
+    size_t _cur_size;
+};
+
+// 日志落地器工厂
+class sink_factory
+{
+public:
+    template&lt;typename Sinker, typename... Args&gt;
+    static log_sink::ptr create(Args&amp;&amp;... args);
+};
+</code></pre>
+<h4 id="可拓展">可拓展</h4>
+<p>拓展实际上就是编写<code>log_sink</code>的子类，重写<code>void log(std::string&amp; data)</code>函数。</p>
+<p>拓展一个以时间为滚动条件的日志落地模块：</p>
+<pre><code class="language-cpp">/* 拓展一个以时间为滚动条件的日志落地模块 */
+enum time_gap {
+    SEC_GAP = 1,
+    MIN_GAP = 60,
+    HOU_GAP = 60 * 60,
+    DAY_GAP = 24 * 60 * 60,
+};
+
+class roll_by_time : public log::log_sink {
+public:
+    roll_by_time(const std::string&amp; base_name, time_gap gap);
+    void log(std::string&amp; data) override;
+private:
+    void rolling();
+private:
+    std::string _base_name; 
+    std::ofstream _ofs;
+    size_t _create_time;
+    time_gap _gap; // 时间间隔
+};
+</code></pre>
+<h4 id="测试">测试</h4>
+<pre><code class="language-cpp">log_sink::ptr sinker1 = sink_factory::create&lt;log::stdout_sink&gt;();
+log_sink::ptr sinker2 = sink_factory::create&lt;log::file_sink&gt;
+(&quot;./log/test_file_sink.log&quot;);
+log_sink::ptr sinker3 = sink_factory::create&lt;log::rolling_sink&gt;
+(&quot;./log/test_rolling_sink&quot;, 1024 * 1024);
+
+while (true)
+{
+    log_msg msg =  {log_level::DEBUG, __LINE__, __FILE__, &quot;root&quot;, &quot;Can i make it? &quot;};
+    log::formatter fmtr;
+    std::string log = fmtr.format(msg);
+
+    sinker1-&gt;log(log);
+    sinker3-&gt;log(log);
+    sinker2-&gt;log(log);
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
+}
+</code></pre>
+<h3 id="35-日志器模块">3.5 日志器模块</h3>
+<h4 id="设计-3">设计</h4>
+<p>对日志等级模块、消息模块、格式化模块和落地模块进行整合，向外提供所有等级的日志输出接口，只有高于等于该等级的日志才能输出。</p>
+<p>日志器类的成员有：格式化器、落地器数组（支持多落地输出）、日志等级限制器、日志器名称以及线程互斥锁。</p>
+<h4 id="基类和同步日志器">基类和同步日志器</h4>
+<p>先设计出日志器基类，再派生出同步和异步日志器。</p>
+<p>本质上，同步日志器就是直接落地，异步日志器就是落地到内存，二者只有落地方向的不同，故我们将落地方式抽象出来，二者调用各自的落地方法。</p>
+<pre><code class="language-cpp">class logger
+{
+public:
+    using ptr = std::shared_ptr&lt;logger&gt;;
+public:
+    // 多落地
+    logger(const string&amp; name, log_level level, formatter::ptr&amp; fmtter, 
+           vector&lt;log_sink::ptr&gt;&amp; sinkers);
+    void debug(const string&amp; file, size_t line, const string&amp; fmt, ...);    	 
+    void info(const string&amp; file, size_t line, const string&amp; fmt, ...);
+    void warn(const string&amp; file, size_t line, const string&amp; fmt, ...);
+  	void error(const string&amp; file, size_t line, const string&amp; fmt, ...);
+    void fatal(const string&amp; file, size_t line, const string&amp; fmt, ...);
+protected:
+    virtual void log(const string&amp; data) = 0;
+    std::string get_payload(const std::string&amp; fmt, va_list&amp; ap);
+protected:    
+    std::string _logger_name;
+    std::atomic&lt;log_level::value&gt; _limit_level;
+    formatter::ptr _formatter;
+    std::vector&lt;log_sink::ptr&gt; _sinkers;
+    std::mutex _mutex;
+};
+</code></pre>
+<pre><code class="language-cpp">class sync_logger : public logger
+{
+public:
+    sync_logger(const std::string&amp; name, log_level::value level, formatter::ptr&amp; fmtter, 
+                std::vector&lt;log_sink::ptr&gt;&amp; sinkers);
+protected:
+    virtual void log(const std::string&amp; data);
+};
+</code></pre>
+<h4 id="日志器建造者">日志器建造者</h4>
+<pre><code class="language-cpp">log::formatter::ptr fmtter(new log::formatter);
+log::log_sink::ptr sinker1 = log::sink_factory::create&lt;log::stdout_sink&gt;();
+log::log_sink::ptr sinker2 = log::sink_factory::create&lt;log::file_sink&gt;
+(&quot;./log/test_file_sink.log&quot;);
+log::log_sink::ptr sinker3 = log::sink_factory::create&lt;log::rolling_sink&gt;
+(&quot;./log/test_rolling_sink&quot;, log::memory_size::m1M);
+std::vector&lt;log::log_sink::ptr&gt; sinkers = {sinker1, sinker2, sinker3};
+log::sync_logger slogger(&quot;sync_logger&quot;, log::log_level::DEBUG, fmtter, sinkers);
+
+slogger.debug(__FILE__, __LINE__, &quot;%d-%s&quot;, 33, &quot;can i make it ?&quot;);
+slogger.info(__FILE__, __LINE__, &quot;%d-%s&quot;, 33, &quot;can i make it ?&quot;);
+slogger.warn(__FILE__, __LINE__, &quot;%d-%s&quot;, 33, &quot;can i make it ?&quot;);
+slogger.error(__FILE__, __LINE__, &quot;%d-%s&quot;, 33, &quot;can i make it ?&quot;);
+slogger.fatal(__FILE__, __LINE__, &quot;%d-%s&quot;, 33, &quot;can i make it ?&quot;);
+</code></pre>
+<p>创建一个日志器模块需要提前创建格式化模块和落地模块数组，太过麻烦。所以使用建造者模式来建造日志器，简化使用复杂度。</p>
+<ol>
+<li>首先我们抽象一个日志器建造者类</li>
+<li>然后我们派生出具体的建造者类</li>
+<li>再使用指挥者类构建所需要的所有组件</li>
+</ol>
+<pre><code class="language-cpp">enum logger_type
+{
+    SYNC_LOGGER = 0,
+    ASYNC_LOGGER,
+};
+
+class logger_builder
+{
+public:
+    using ptr = std::shared_ptr&lt;logger_builder&gt;;
+public:
+    logger_builder();
+    void build_logger_type(const logger_type type);
+    void build_logger_name(const std::string name); 
+    void build_logger_level(log_level::value level);
+    void build_formatter(const std::string&amp; pattern);
+    template&lt;typename SinkType, typename... Args&gt;
+    void build_sinker(Args&amp;&amp;... args);
+    virtual logger::ptr build() = 0;
+protected:
+    logger_type _logger_type;
+    std::string _logger_name;
+    log_level::value _base_level;
+    formatter::ptr _formatter;
+    std::vector&lt;log_sink::ptr&gt; _sinkers;
+};
+
+class local_logger_builder : public logger_builder {
+public:
+    logger::ptr build() override;
+};
+
+class logger_director {
+public:
+    using ptr = std::shared_ptr&lt;logger_director&gt;;
+public:
+    logger_director(logger_builder::ptr builder);
+    void construct(logger_type type,
+                   const std::string&amp; name, 
+                   log_level::value level,
+                   const std::string&amp; pattern = 
+                   	   &quot;[%d{%F %H:%M:%S}][%p][%t][%c][%f:%l]%T%m%n&quot;);
+    template&lt;typename SinkType, typename... Args&gt;
+    void construct_sinker(Args&amp;&amp;... args);
+private:
+    logger_builder::ptr _builder;
+};
+</code></pre>
+<h4 id="测试-2">测试</h4>
+<pre><code class="language-cpp">log::logger_builder::ptr lbuiler(new log::local_logger_builder);
+log::logger_director::ptr ldirector(new log::logger_director(lbuiler));
+
+ldirector-&gt;construct(log::logger_type::SYNC_LOGGER, &quot;root_logger&quot;, DEBUG);
+ldirector-&gt;construct_sinker&lt;log::stdout_sink&gt;();
+ldirector-&gt;construct_sinker&lt;log::file_sink&gt;(&quot;./log/test_file_sink.log&quot;);
+ldirector-&gt;construct_sinker&lt;log::rolling_sink&gt;(&quot;./log/test_rolling_sink&quot;,  m1M);
+log::logger::ptr slogger = lbuiler-&gt;build();
+
+slogger-&gt;debug(__FILE__, __LINE__, &quot;%d-%s&quot;, 33, &quot;can i make it ?&quot;);
+slogger-&gt;info(__FILE__, __LINE__, &quot;%d-%s&quot;, 33, &quot;can i make it ?&quot;);
+slogger-&gt;warn(__FILE__, __LINE__, &quot;%d-%s&quot;, 33, &quot;can i make it ?&quot;);
+slogger-&gt;error(__FILE__, __LINE__, &quot;%d-%s&quot;, 33, &quot;can i make it ?&quot;);
+slogger-&gt;fatal(__FILE__, __LINE__, &quot;%d-%s&quot;, 33, &quot;can i make it ?&quot;);
+</code></pre>
+<h3 id="36-异步日志模块">3.6 异步日志模块</h3>
+<h4 id="设计-4">设计</h4>
+<p>异步日志器，目的是防止日志写入发生阻塞而耽误业务线程的运行。所以业务线程只需将日志内容放入缓冲区中，有异步线程实现落地。</p>
+<img src="https://img.gejiba.com/images/2c020e0a4443748e638d1b5791246799.png" style="zoom: 45%;" />
+<p>为避免锁降低效率，我们使用双缓冲区策略。</p>
+<ul>
+<li>当消费缓冲区为空时，就可以进行交换。这样可以避免生产者和消费者之间的锁冲突。</li>
+<li>在生产端可以使用信号量来尽量的降低生产者之间的锁冲突。</li>
+</ul>
+<img src="https://img.gejiba.com/images/38784326cccc9a11d206065635c1a809.png" style="zoom:45%;" />
+<h4 id="缓冲区类">缓冲区类</h4>
+<ol>
+<li>管理字符串数据的缓冲区，本质就是数组</li>
+<li>当前写入位置的指针</li>
+<li>当前读取位置的指针</li>
+</ol>
+<pre><code class="language-cpp">const size_t DEFAULT_BUFFER_SIZE = util::memory_size::m1M;
+const size_t DEFAULT_THRESHOLD   = util::memory_size::m8M;
+const size_t DEFAULT_INCREASE    = util::memory_size::m1M;
+
+class buffer
+{
+public:
+    buffer(size_t size = DEFAULT_BUFFER_SIZE);
+    void push(const char* data, size_t len);
+    void push(const std::string&amp; s);
+
+    const char* pop(size_t len);
+
+    size_t readable_size();
+    size_t writable_size();
+
+    void move_writer(size_t len);
+    void move_reader(size_t len);
+
+    void reset();
+    void swap(buffer&amp; b);
+    bool empty();
+private:
+    void ensure_size(size_t len);
+private:
+    std::vector&lt;char&gt; _buffer;
+    size_t _reader_idx;
+    size_t _writer_idx;
+};
+</code></pre>
+<h4 id="异步工作器类">异步工作器类</h4>
+<p>异步工作使用双缓冲区设计，外界将数据放入生产缓冲区，异步线程对处理缓冲区的数据进行处理。若处理缓冲区为空，则两者进行交换。</p>
+<p>异步工作器类的成员：</p>
+<ol>
+<li>双缓冲区，生产和消费</li>
+<li>互斥锁，保证线程安全</li>
+<li>条件变量，确定交换缓冲区的时机</li>
+<li>回调函数，提示异步工作器具体如何处理缓冲区的数据</li>
+</ol>
+<p>异步工作器类的接口：</p>
+<ol>
+<li>停止异步工作器</li>
+<li>添加数据到缓冲区</li>
+<li>创建线程</li>
+</ol>
+<pre><code class="language-cpp">class async_looper
+{
+public:
+    using ptr = std::shared_ptr&lt;async_looper&gt;;
+    using handler = std::function&lt;void(buffer&amp;)&gt;;
+public:
+    async_looper(handler&amp; hd);
+    ~async_looper() { stop(); }
+    void stop();
+    void push(const char* data, size_t len);
+private:
+    void routine();
+    handler _callback; // 缓冲区的处理函数
+private:
+    std::atomic&lt;bool&gt; _stop;
+    buffer _pdr_buf; // producer buffer
+    buffer _csr_buf; // consumer buffer
+    std::mutex _mtx;
+    std::condition_variable _pdr_cv;
+    std::condition_variable _csr_cv;
+    std::thread _th;
+};
+</code></pre>
+<h4 id="异步日志器类">异步日志器类</h4>
+<p>异步日志器继承自logger日志器类。log函数中，将格式化数据传给异步工作器，异步工作器再将消息放入缓冲区中。</p>
+<pre><code class="language-cpp">class async_logger : public logger
+{
+public:
+    async_logger(const std::string&amp; name, 
+                 log_level::value level, 
+                 formatter::ptr&amp; fmtter, 
+                 std::vector&lt;log_sink::ptr&gt;&amp; sinkers,
+                 looper_type looper_type = looper_type::SAFE_MODE);
+protected:
+    virtual void log(const std::string&amp; data);
+public:
+    void looper_handler(buffer&amp; bf);
+private:
+    async_looper::ptr _looper; // 异步工作器
+};
+</code></pre>
+<h3 id="37-日志器管理器">3.7 日志器管理器</h3>
+<h4 id="设计-5">设计</h4>
+<p>日志器管理类，是一个单例类管理所有创建的日志器，以达到在项目任意位置都可以获取单例对象的目的。</p>
+<p>单例管理器对象创建时，默认先创建一个日志器类，仅让日志落地标准输出，便于用户的使用。</p>
+<p>类的成员：</p>
+<ol>
+<li>默认日志器</li>
+<li>管理的日志器的数组</li>
+<li>互斥锁</li>
+</ol>
+<p>提供的接口：</p>
+<ol>
+<li>添加并管理一个日志器</li>
+<li>判断是否存在指定名称的日志器</li>
+<li>获取指定名称的日志器</li>
+<li>获取默认日志器</li>
+</ol>
+<pre><code class="language-cpp">class logger_manager
+{
+public:
+    static logger_manager&amp; get_instance();
+    void add_logger(const logger::ptr&amp; logger);
+    bool has_logger(const std::string&amp; name);
+    logger::ptr get_logger(const std::string&amp; name);
+    logger::ptr default_logger();
+private:
+    logger_manager();
+private:
+    std::mutex _mtx;
+    logger::ptr _default_logger;
+    std::unordered_map&lt;std::string, logger::ptr&gt; _loggers;
+};
+</code></pre>
+<h3 id="38-全局接口设计">3.8 全局接口设计</h3>
+<pre><code class="language-cpp">logly::logger::ptr lg = logly::logger_manager::get_instance().default_logger();
+lg-&gt;debug(__FILE__, __LINE__, &quot;%s-%d&quot;, &quot;test logger manager succ&quot;, 666);
+</code></pre>
+<p>上述的最简单的默认日志器的使用方式还是复杂，所以我们提供全局函数，提升日志系统的便捷性。</p>
+<ol>
+<li>提供获取指定日志器的全局接口（避免操作单例对象）</li>
+<li>使用宏函数对日志接口进行代理（使用代理模式）</li>
+<li>提供宏函数，直接进行日志的标准输出打印（不需要考虑日志器）</li>
+</ol>
+<pre><code class="language-cpp">#define debug(fmt, ...) debug(__FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define  info(fmt, ...)  info(__FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define  warn(fmt, ...)  warn(__FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define error(fmt, ...) error(__FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define fatal(fmt, ...) fatal(__FILE__, __LINE__, fmt, ##__VA_ARGS__)
+
+#define DEBUG(fmt, ...) logly::default_logger()-&gt;debug(fmt, ##__VA_ARGS__)
+#define  INFO(fmt, ...) logly::default_logger()-&gt; info(fmt, ##__VA_ARGS__)
+#define  WARN(fmt, ...) logly::default_logger()-&gt; warn(fmt, ##__VA_ARGS__)
+#define ERROR(fmt, ...) logly::default_logger()-&gt;error(fmt, ##__VA_ARGS__)
+#define FATAL(fmt, ...) logly::default_logger()-&gt;fatal(fmt, ##__VA_ARGS__)
+</code></pre>
+<pre><code class="language-cpp">DEBUG(&quot;%s-%d&quot;, &quot;test global interface succ&quot;, 666);
+INFO (&quot;%s-%d&quot;, &quot;test global interface succ&quot;, 666);
+WARN (&quot;%s-%d&quot;, &quot;test global interface succ&quot;, 666);
+ERROR(&quot;%s-%d&quot;, &quot;test global interface succ&quot;, 666);
+FATAL(&quot;%s-%d&quot;, &quot;test global interface succ&quot;, 666);
+
+logger::ptr logger = logger_manager::get_instance().get_logger(&quot;async_logger&quot;);
+logger-&gt;debug(&quot;%s-%d&quot;, &quot;test global interface succ&quot;, 666);
+logger-&gt;info (&quot;%s-%d&quot;, &quot;test global interface succ&quot;, 666);
+logger-&gt;warn (&quot;%s-%d&quot;, &quot;test global interface succ&quot;, 666);
+logger-&gt;error(&quot;%s-%d&quot;, &quot;test global interface succ&quot;, 666);
+logger-&gt;fatal(&quot;%s-%d&quot;, &quot;test global interface succ&quot;, 666);
+</code></pre>
+<ul>
+<li>使用<code>DEBUG</code>等“大写”的宏函数，就是直接调用默认的日志器进行日志的标准输出。</li>
+<li><code>logger-&gt;debug</code>等是调用“小写”的宏函数，将参数列表替换成带有文件名和行号的。因为宏是全局的，所以优先于类成员函数。</li>
+</ul>
+<p> </p>
+<h2 id="4-性能测试">4. 性能测试</h2>
+<h3 id="41-测试设计">4.1 测试设计</h3>
+<ul>
+<li>评判标准：平均每秒能输出多少条（多大空间）日志到文件。</li>
+<li>控制变量：同步异步日志器、线程数量</li>
+<li>测试方法：计算指定条数指定长度的日志的输出耗时，得出每秒日志的输出量。</li>
+</ul>
+<h3 id="42-代码设计">4.2 代码设计</h3>
+<p>测试工具支持：</p>
+<ol>
+<li>支持控制写日志的线程数量</li>
+<li>支持控制写日志的总数量</li>
+<li>分别对同步异步日志器进行各自的性能测试</li>
+</ol>
+<p>实现方式：</p>
+<p>封装一个测试接口，参数指定日志器，线程数量、日志数量、单条日志大小。（日志大小指有效载荷大小）</p>
+<p>输出之始开始计时，输出完毕计时结束，二者之差就是所耗时间。</p>
+<p>每秒输出量 = 日志数量 / 总耗时</p>
+<p>每秒输出大小 = 日志数量 * 单条日志大小 / 总耗时</p>
+<blockquote>
+<p>注意：异步日志器启动非安全模式。</p>
+</blockquote>
+<pre><code class="language-cpp">const size_t THREAD_NUM = 3;
+const size_t MSG_NUM = 100 * 10000;
+const size_t MSG_LEN = 50;
+
+void bench(const std::string&amp; logger_name, size_t thread_num, size_t msg_num, size_t msg_len)
+{
+    logly::logger::ptr logger = logly::get_logger(logger_name);
+
+    if (logger.get() == nullptr)
+        return;
+    
+    printf(&quot;测试开始，日志共 %ld 条，单条大小 %ld Bytes，总大小 %ld KB\n\n&quot;, 
+           msg_num, msg_len, msg_num * msg_len / 1024);
+
+    std::string msg(msg_len - 1, 'a');
+    size_t msg_per_th = msg_num / thread_num; // 单个线程的输出日志条数
+
+    std::vector&lt;std::thread&gt; threads;
+    std::vector&lt;double&gt; cost_array(thread_num);
+
+    for (int i = 0; i &lt; thread_num; i++)
+    {
+        threads.emplace_back([&amp;, i]()
+            {
+                auto start = std::chrono::high_resolution_clock::now();
+
+                for (int j = 0; j &lt; msg_per_th; j++) logger-&gt;fatal(&quot;%s&quot;, msg.c_str());
+
+                auto end = std::chrono::high_resolution_clock::now();
+
+                std::chrono::duration&lt;double&gt; cost = end - start;
+                cost_array[i] = cost.count();
+
+                printf(&quot;线程%d：\t输出日志 %ld 条，耗时 %lf s\n&quot;, i, msg_per_th, cost_array[i]);
+            }
+        );
+    }
+
+    for (auto&amp; th : threads)
+        th.join();
+
+    double final_cost = cost_array[0];
+    for (auto e : cost_array)
+        if (final_cost &lt; e) final_cost = e;
+
+    size_t count_per_sec = msg_num / final_cost; // 每秒输出日志数量
+    size_t size_per_sec = msg_num * msg_len / final_cost / 1024; // 每秒输出日志大小 KB
+
+    printf(&quot;\n\t总耗时：%lf s\n&quot;, final_cost);
+    printf(&quot;\t每秒输出日志数量 %ld 条\n&quot;, count_per_sec);
+    printf(&quot;\t每秒输出日志大小 %ld KB\n&quot;, size_per_sec);
+}
+
+void sync_bench()
+{
+    logly::logger_builder::ptr lbuiler(new logly::local_logger_builder);
+    logly::logger_director::ptr ldirector(new logly::logger_director(lbuiler));
+
+    ldirector-&gt;construct(logly::logger_type::SYNC_LOGGER, &quot;sync_logger&quot;, logly::log_level::DEBUG, &quot;%m%n&quot;);
+    ldirector-&gt;construct_sinker&lt;logly::file_sink&gt;(&quot;./log/sync.log&quot;);
+    logly::logger_manager::get_instance().add_logger(lbuiler-&gt;build());
+
+    bench(&quot;sync_logger&quot;, 1, MSG_NUM, MSG_LEN);
+}
+
+void async_bench()
+{
+    logly::logger_builder::ptr lbuiler(new logly::local_logger_builder);
+    logly::logger_director::ptr ldirector(new logly::logger_director(lbuiler));
+
+    ldirector-&gt;construct(logger_type::ASYNC_LOGGER,&quot;async_logger&quot;,log_level::DEBUG, &quot;%m%n&quot;);
+    ldirector-&gt;construct_sinker&lt;logly::file_sink&gt;(&quot;./log/async.log&quot;);
+    ldirector-&gt;enable_unsafe_mode();
+    logly::logger_manager::get_instance().add_logger(lbuiler-&gt;build());
+
+    bench(&quot;async_logger&quot;, THREAD_NUM, MSG_NUM, MSG_LEN);
+}
+</code></pre>
+<h3 id="43-测试结果">4.3 测试结果</h3>
+<p>测试环境：2核2G ubuntu系统云服务器</p>
+<pre><code class="language-txt">-------------- 同步日志器测试 --------------
+    
+测试开始，日志共 1000000条，单条大小 50 Bytes，总大小 48828 KB
+    
+线程0： 输出日志 333333 条，耗时 0.698113 s
+线程2： 输出日志 333333 条，耗时 0.700333 s
+线程1： 输出日志 333333 条，耗时 0.701003 s
+
+    总耗时：0.701003 s
+    每秒输出日志数量 1426527 条
+    每秒输出日志大小 69654 KB
+    
+    
+-------------- 异步日志器测试 --------------
+
+测试开始，日志共 1000000条，单条大小 50 Bytes，总大小 48828 KB
+
+线程0： 输出日志 333333 条，耗时 0.664660 s
+线程1： 输出日志 333333 条，耗时 0.665603 s
+线程2： 输出日志 333333 条，耗时 0.665621 s
+
+    总耗时：0.665621 s
+    每秒输出日志数量 1502355 条
+    每秒输出日志大小 73357 KB
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[Hello yourfriendyo]]></title>
+        <id>https://yourfriendyo.github.io/post/hello-gridea/</id>
+        <link href="https://yourfriendyo.github.io/post/hello-gridea/">
+        </link>
+        <updated>2018-12-11T16:00:00.000Z</updated>
+        <summary type="html"><![CDATA[<p>👏  欢迎使用 <strong>Gridea</strong> ！<br>
+✍️  <strong>Gridea</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
+]]></summary>
+        <content type="html"><![CDATA[<p>👏  欢迎使用 <strong>Gridea</strong> ！<br>
+✍️  <strong>Gridea</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
+<!-- more -->
+<p><a href="https://github.com/getgridea/gridea">Github</a><br>
+<a href="https://gridea.dev/">Gridea 主页</a><br>
+<a href="https://fehey.com/">示例网站</a></p>
+<h2 id="特性">特性👇</h2>
+<p>📝  你可以使用最酷的 <strong>Markdown</strong> 语法，进行快速创作</p>
+<p>🌉  你可以给文章配上精美的封面图和在文章任意位置插入图片</p>
+<p>🏷️  你可以对文章进行标签分组</p>
+<p>📋  你可以自定义菜单，甚至可以创建外部链接菜单</p>
+<p>💻  你可以在 <strong>Windows</strong>，<strong>MacOS</strong> 或 <strong>Linux</strong> 设备上使用此客户端</p>
+<p>🌎  你可以使用 <strong>𝖦𝗂𝗍𝗁𝗎𝖻 𝖯𝖺𝗀𝖾𝗌</strong> 或 <strong>Coding Pages</strong> 向世界展示，未来将支持更多平台</p>
+<p>💬  你可以进行简单的配置，接入 <a href="https://github.com/gitalk/gitalk">Gitalk</a> 或 <a href="https://github.com/SukkaW/DisqusJS">DisqusJS</a> 评论系统</p>
+<p>🇬🇧  你可以使用<strong>中文简体</strong>或<strong>英语</strong></p>
+<p>🌁  你可以任意使用应用内默认主题或任意第三方主题，强大的主题自定义能力</p>
+<p>🖥  你可以自定义源文件夹，利用 OneDrive、百度网盘、iCloud、Dropbox 等进行多设备同步</p>
+<p>🌱 当然 <strong>Gridea</strong> 还很年轻，有很多不足，但请相信，它会不停向前 🏃</p>
+<p>未来，它一定会成为你离不开的伙伴</p>
+<p>尽情发挥你的才华吧！</p>
+<p>😘 Enjoy~</p>
+]]></content>
+    </entry>
+</feed>
